@@ -1,0 +1,461 @@
+
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Console 2.5D Demo</title>
+
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+    <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
+    <script src="https://cdn.babylonjs.com/inspector/babylon.inspector.bundle.js"></script>
+    <script src="src/levels.js"></script>
+    <script src="src/map.js"></script>
+    <script src="src/enemy.js"></script>
+    <script src="src/player.js"></script>
+    <script src="src/menuScene.js"></script>
+
+    <style>
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        #virtualJoystick {
+            position: fixed;
+            left: 24px;
+            bottom: 24px;
+            width: 140px;
+            height: 140px;
+            border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, 0.35);
+            background: rgba(255, 255, 255, 0.08);
+            touch-action: none;
+            user-select: none;
+            z-index: 20;
+            display: none;
+        }
+
+        #virtualJoystick .stick {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 56px;
+            height: 56px;
+            margin-left: -28px;
+            margin-top: -28px;
+            border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            background: rgba(255, 255, 255, 0.2);
+            pointer-events: none;
+            transform: translate(0px, 0px);
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="renderCanvas"></canvas>
+    <div id="virtualJoystick" aria-hidden="true"><div class="stick"></div></div>
+
+    <script>
+        const canvas = document.getElementById("renderCanvas");
+        const engine = new BABYLON.Engine(canvas, true);
+        const levelMaps = Array.isArray(window.LEVEL_MAPS) ? window.LEVEL_MAPS : [];
+        if (levelMaps.length === 0) {
+            throw new Error("LEVEL_MAPS is missing. Please check src/levels.js");
+        }
+        let currentLevelIndex = 0;
+        let activeScene = null;
+        let gameScene = null;
+
+        const PROGRESS_STORAGE_KEY = "lodeRunnerProgressV1";
+
+        function loadProgress() {
+            const defaultProgress = {
+                highestUnlocked: 0,
+                lastPlayed: 0,
+                lastCleared: -1,
+            };
+
+            try {
+                const raw = localStorage.getItem(PROGRESS_STORAGE_KEY);
+                if (!raw) return defaultProgress;
+                const parsed = JSON.parse(raw);
+                return {
+                    highestUnlocked: Number.isFinite(parsed.highestUnlocked) ? parsed.highestUnlocked : 0,
+                    lastPlayed: Number.isFinite(parsed.lastPlayed) ? parsed.lastPlayed : 0,
+                    lastCleared: Number.isFinite(parsed.lastCleared) ? parsed.lastCleared : -1,
+                };
+            } catch (err) {
+                console.warn("Cannot load progress cache", err);
+                return defaultProgress;
+            }
+        }
+
+        let progress = loadProgress();
+
+        function persistProgress() {
+            try {
+                localStorage.setItem(PROGRESS_STORAGE_KEY, JSON.stringify(progress));
+            } catch (err) {
+                console.warn("Cannot save progress cache", err);
+            }
+        }
+
+        function getHighestUnlockedIndex() {
+            return Math.max(0, Math.min(levelMaps.length - 1, progress.highestUnlocked || 0));
+        }
+
+        function setLastPlayedLevel(levelIndex) {
+            const clamped = Math.max(0, Math.min(levelMaps.length - 1, levelIndex));
+            progress.lastPlayed = clamped;
+            persistProgress();
+        }
+
+        function markLevelCompleted(levelIndex) {
+            const clamped = Math.max(0, Math.min(levelMaps.length - 1, levelIndex));
+            const unlockedNext = Math.min(levelMaps.length - 1, clamped + 1);
+            progress.lastCleared = Math.max(progress.lastCleared || -1, clamped);
+            progress.highestUnlocked = Math.max(progress.highestUnlocked || 0, unlockedNext);
+            progress.lastPlayed = Math.min(progress.highestUnlocked, unlockedNext);
+            persistProgress();
+        }
+
+        function buildMenuScene() {
+            if (typeof window.createMenuScene !== "function") {
+                throw new Error("createMenuScene is missing. Please check src/menuScene.js");
+            }
+
+            return window.createMenuScene({
+                engine,
+                levelMaps,
+                getHighestUnlockedIndex,
+                getLastPlayedLevel: () => (Number.isFinite(progress.lastPlayed) ? progress.lastPlayed : 0),
+                onStartGame: (levelIndex) => startGame(levelIndex),
+            });
+        }
+
+        const createScene = function (levelIndex) {
+            const scene = new BABYLON.Scene(engine);
+            scene.metadata = { requestNextLevel: false };
+            scene.environmentTexture = BABYLON.CubeTexture.CreateFromPrefilteredData(
+                "https://playground.babylonjs.com/textures/environment.env",
+                scene
+            );
+            scene.environmentIntensity = 0.8;
+            scene.imageProcessingConfiguration.toneMappingEnabled = true;
+            scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+            scene.imageProcessingConfiguration.exposure = 1.3;
+            scene.imageProcessingConfiguration.contrast = 1.05;
+
+            const CAMERA_CONFIG = {
+                minPitch: 1.54,
+                maxPitch: 1.34,
+                mapBottomY: 0,
+                mapTopY: 32,
+                smoothing: 0.16,
+                horizontalYawRange: 0.12,
+            };
+
+            function clamp01(v) {
+                return Math.max(0, Math.min(1, v));
+            }
+
+            function updateCamera(player, camera, dt, mapWidthWorld, mapCenterX, mapCenterY) {
+                const yNorm = clamp01(
+                    (player.position.y - CAMERA_CONFIG.mapBottomY) /
+                    (CAMERA_CONFIG.mapTopY - CAMERA_CONFIG.mapBottomY)
+                );
+
+                const targetBeta = BABYLON.Scalar.Lerp(
+                    CAMERA_CONFIG.minPitch,
+                    CAMERA_CONFIG.maxPitch,
+                    yNorm
+                );
+
+                const smoothT = 1 - Math.pow(1 - CAMERA_CONFIG.smoothing, Math.max(1, dt * 60));
+                camera.beta = BABYLON.Scalar.Lerp(camera.beta, targetBeta, smoothT);
+
+                const xNorm = clamp01(player.position.x / mapWidthWorld);
+                const baseAlpha = -Math.PI / 2;
+                const horizontalInfluence = (xNorm - 0.5) * 2;
+                const followYaw = horizontalInfluence * CAMERA_CONFIG.horizontalYawRange;
+                const targetAlpha = baseAlpha + followYaw;
+                camera.alpha = BABYLON.Scalar.Lerp(camera.alpha, targetAlpha, smoothT);
+
+                camera.target.x = mapCenterX;
+                camera.target.y = mapCenterY;
+                camera.target.z = 0;
+            }
+
+            const camera = new BABYLON.ArcRotateCamera(
+                "cam",
+                -Math.PI / 2,
+                CAMERA_CONFIG.minPitch,
+                48,
+                new BABYLON.Vector3(0, 0, 0),
+                scene
+            );
+            camera.lowerBetaLimit = 1.2;
+            camera.upperBetaLimit = 1.56;
+            camera.lowerRadiusLimit = 28;
+            camera.upperRadiusLimit = 90;
+            camera.minZ = 0.3;
+            camera.maxZ = 180;
+            // Lock camera: keep scripted follow only, disable user mouse/touch/wheel/keyboard camera input.
+            camera.inputs.clear();
+
+            const light = new BABYLON.DirectionalLight("light", new BABYLON.Vector3(-0.6, -1, -0.4), scene);
+            light.position = new BABYLON.Vector3(20, 30, 20);
+            light.intensity = 0.85;
+
+            const hemiLight = new BABYLON.HemisphericLight("fillLight", new BABYLON.Vector3(0, 1, 0), scene);
+            hemiLight.intensity = 1.1;
+            hemiLight.groundColor = new BABYLON.Color3(0.75, 0.75, 0.75);
+
+            const shadowGen = new BABYLON.ShadowGenerator(1024, light);
+            shadowGen.useBlurExponentialShadowMap = true;
+            shadowGen.setDarkness(0.2);
+
+            function mat(color) {
+                const m = new BABYLON.StandardMaterial("m", scene);
+                m.diffuseColor = color;
+                return m;
+            }
+
+            const brickMat = mat(new BABYLON.Color3(0.8, 0.6, 0.3));
+            const goldMat = mat(new BABYLON.Color3(1, 0.8, 0.2));
+            goldMat.emissiveColor = new BABYLON.Color3(0.6, 0.4, 0);
+            const ladderMat = mat(new BABYLON.Color3(0.2, 0.8, 0.3));
+            const ropeMat = mat(new BABYLON.Color3(0.55, 0.36, 0.2));
+            const playerMat = mat(new BABYLON.Color3(0.2, 0.6, 1));
+            const enemyMat = mat(new BABYLON.Color3(0.95, 0.25, 0.25));
+
+            const mapController = createMapController({
+                scene,
+                shadowGen,
+                brickMat,
+                goldMat,
+                ladderMat,
+                ropeMat,
+                enemyMat,
+                tileSize: 2,
+                enemyPathZ: 1.2,
+                mapData: levelMaps[levelIndex],
+            });
+
+            const {
+                map,
+                tileSize,
+                mapWorldWidth,
+                mapWorldHeight,
+                mapCenterX,
+                mapCenterY,
+                solids,
+                ladders,
+                golds,
+                enemies,
+                dugHoles,
+                playerSpawn,
+                holeKey,
+                createBrickAt,
+                createIceAt,
+                worldXToCol,
+                worldYToRow,
+                rowToWorldY,
+                isInsideMap,
+                isSolidCell,
+                isLadderCell,
+                isRopeCell,
+                getEnemyPath,
+                updateEnemyPathLine,
+                gridToWorldPosition,
+                hasSolidAtGrid,
+                brickHalfHeight,
+                setPlayerMesh,
+            } = mapController;
+
+            CAMERA_CONFIG.mapBottomY = 0;
+            CAMERA_CONFIG.mapTopY = mapWorldHeight;
+
+            const playerController = createPlayerController({
+                scene,
+                shadowGen,
+                playerMat,
+                playerSpawn,
+                tileSize,
+                brickHalfHeight,
+                solids,
+                ladders,
+                golds,
+                enemies,
+                dugHoles,
+                holeKey,
+                createBrickAt,
+                createIceAt,
+                worldXToCol,
+                worldYToRow,
+                rowToWorldY,
+                isRopeCell,
+                enemyController: null,
+                brickRespawnMs: 8000,
+            });
+
+            setPlayerMesh(playerController.player);
+
+            const enemyController = createEnemyController({
+                enemies,
+                map,
+                tileSize,
+                dugHoles,
+                holeKey,
+                isInsideMap,
+                isSolidCell,
+                isLadderCell,
+                isRopeCell,
+                worldXToCol,
+                worldYToRow,
+                rowToWorldY,
+                hasSolidAtGrid,
+                getEnemyPath,
+                updateEnemyPathLine,
+                gridToWorldPosition,
+                player: playerController.player,
+                enemyStepDuration: 0.45,
+                enemyFallSpeed: 7,
+                enemyTrapDuration: 2.2,
+            });
+            playerController.setEnemyController(enemyController);
+
+            try {
+                const maxDim = Math.max(mapWorldWidth, mapWorldHeight);
+                camera.radius = Math.max(36, maxDim * 1.45);
+                camera.target = new BABYLON.Vector3(mapCenterX, mapCenterY, 0);
+            } catch (e) {
+                console.warn("Camera framing failed:", e);
+            }
+
+            const ui = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+            const goldText = new BABYLON.GUI.TextBlock();
+            goldText.text = "Gold: 0";
+            goldText.color = "#FFD700";
+            goldText.fontSize = 22;
+            goldText.resizeToFit = true;
+            goldText.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+            goldText.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+            goldText.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+            goldText.paddingLeft = "20px";
+            goldText.paddingTop = "20px";
+            ui.addControl(goldText);
+
+            const levelText = new BABYLON.GUI.TextBlock();
+            levelText.text = `Level: ${levelIndex + 1}/${levelMaps.length}`;
+            levelText.color = "#9ED0FF";
+            levelText.fontSize = 20;
+            levelText.resizeToFit = true;
+            levelText.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_RIGHT;
+            levelText.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_RIGHT;
+            levelText.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+            levelText.paddingRight = "20px";
+            levelText.paddingTop = "20px";
+            ui.addControl(levelText);
+
+            scene.onBeforeRenderObservable.add(() => {
+                const dt = engine.getDeltaTime() / 1000;
+                playerController.update(dt);
+                enemyController.updateEnemyAI(dt);
+                playerController.handleEnemyCollision();
+                playerController.collectGold(goldText);
+                updateCamera(playerController.player, camera, dt, mapWorldWidth, mapCenterX, mapCenterY);
+
+                if (golds.length === 0) {
+                    scene.metadata.requestNextLevel = true;
+                }
+            });
+
+            const bgWorldZ = 40;
+            const parallaxFactor = 0.3;
+            try {
+                const bg = BABYLON.MeshBuilder.CreatePlane("bg_plane", { width: 200, height: 120 }, scene);
+                bg.position = new BABYLON.Vector3(camera.position.x * parallaxFactor, mapCenterY * 0.2, bgWorldZ);
+                bg.isPickable = false;
+                bg.receiveShadows = false;
+
+                const bgMat = new BABYLON.StandardMaterial("bgMat", scene);
+                bgMat.diffuseTexture = new BABYLON.Texture("background-lode.png", scene);
+                bgMat.disableLighting = true;
+                bgMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+                bgMat.backFaceCulling = false;
+                bg.material = bgMat;
+                bg.renderingGroupId = 0;
+            } catch (e) {
+                console.warn("Khong the tao background plane:", e);
+            }
+
+            return scene;
+        };
+
+        function startGame(levelIndex) {
+            currentLevelIndex = Math.max(0, Math.min(levelMaps.length - 1, levelIndex));
+            setLastPlayedLevel(currentLevelIndex);
+            if (activeScene && activeScene !== gameScene) {
+                activeScene.dispose();
+            }
+            if (gameScene) {
+                gameScene.dispose();
+            }
+
+            gameScene = createScene(currentLevelIndex);
+            activeScene = gameScene;
+            window.scene = gameScene;
+        }
+
+        activeScene = buildMenuScene();
+        window.scene = activeScene;
+
+        function loadNextLevel() {
+            markLevelCompleted(currentLevelIndex);
+            currentLevelIndex = (currentLevelIndex + 1) % levelMaps.length;
+            setLastPlayedLevel(currentLevelIndex);
+            if (gameScene) {
+                gameScene.dispose();
+            }
+            gameScene = createScene(currentLevelIndex);
+            activeScene = gameScene;
+            window.scene = gameScene;
+        }
+
+        window.addEventListener("keydown", (e) => {
+            if (!activeScene) return;
+            if (e.key === "F2") {
+                if (activeScene.debugLayer.isVisible()) {
+                    activeScene.debugLayer.hide();
+                } else {
+                    activeScene.debugLayer.show({ overlay: true });
+                }
+            }
+        });
+
+        engine.runRenderLoop(() => {
+            if (!activeScene) return;
+            activeScene.render();
+            if (activeScene === gameScene && activeScene.metadata && activeScene.metadata.requestNextLevel) {
+                loadNextLevel();
+            }
+        });
+        window.addEventListener("resize", () => engine.resize());
+    </script>
+</body>
+
+
+</html>

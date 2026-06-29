@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Console 2.5D Parallax Demo</title>
+
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
+
+    <style>
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="renderCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById("renderCanvas");
+        const engine = new BABYLON.Engine(canvas, true);
+
+        const createScene = function () {
+
+            const scene = new BABYLON.Scene(engine);
+            scene.clearColor = new BABYLON.Color4(0, 0, 0, 1);
+
+            // ================= CAMERA (Console Style) =================
+            const camera = new BABYLON.FreeCamera("cam",
+                new BABYLON.Vector3(8, 12, -22),
+                scene);
+
+            camera.rotation.x = 0.4;
+
+            const cameraBaseY = 12;
+            const cameraBaseZ = -22;
+            const deadZone = 2;
+            const followSpeed = 0.08;
+
+            // ================= LIGHT =================
+            const light = new BABYLON.DirectionalLight("light",
+                new BABYLON.Vector3(-0.5, -1, 0.5),
+                scene);
+            light.position = new BABYLON.Vector3(20, 30, -20);
+
+            const shadowGen = new BABYLON.ShadowGenerator(1024, light);
+            shadowGen.useBlurExponentialShadowMap = true;
+
+            // ================= PARALLAX BACKGROUND =================
+
+            // ===== SKY (xa nhất) =====
+            const sky = BABYLON.MeshBuilder.CreatePlane("sky",
+                { width: 400, height: 120 }, scene);
+            sky.position.z = -150;
+            sky.position.y = 40;
+
+            const skyMat = new BABYLON.StandardMaterial("skyMat", scene);
+            skyMat.disableLighting = true;
+            skyMat.backFaceCulling = false;
+
+            const skyTex = new BABYLON.DynamicTexture("skyTex", { width: 1024, height: 512 }, scene);
+            const ctx = skyTex.getContext();
+            const grad = ctx.createLinearGradient(0, 0, 0, 512);
+            grad.addColorStop(0, "#4AA3FF");
+            grad.addColorStop(1, "#013A63");
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 1024, 512);
+            skyTex.update();
+
+            skyMat.diffuseTexture = skyTex;
+            sky.material = skyMat;
+
+            // ===== MOUNTAIN (layer giữa) =====
+            const mountain = BABYLON.MeshBuilder.CreatePlane("mountain",
+                { width: 400, height: 80 }, scene);
+            mountain.position.z = -100;
+            mountain.position.y = 25;
+
+            const mMat = new BABYLON.StandardMaterial("mMat", scene);
+            mMat.disableLighting = true;
+            mMat.diffuseColor = new BABYLON.Color3(0.2, 0.3, 0.4);
+            mountain.material = mMat;
+
+            // // ===== FAR GROUND =====
+            // const farGround = BABYLON.MeshBuilder.CreatePlane("far",
+            //     { width: 400, height: 40 }, scene);
+            // farGround.position.z = -60;
+            // farGround.position.y = 10;
+
+            // const fMat = new BABYLON.StandardMaterial("fMat", scene);
+            // fMat.disableLighting = true;
+            // fMat.diffuseColor = new BABYLON.Color3(0.1, 0.2, 0.25);
+            // farGround.material = fMat;
+
+
+            // ================= MAP =================
+            function mat(color) {
+                const m = new BABYLON.StandardMaterial("m", scene);
+                m.diffuseColor = color;
+                return m;
+            }
+
+            const brickMat = mat(new BABYLON.Color3(0.8, 0.6, 0.3));
+            const goldMat = mat(new BABYLON.Color3(1, 0.8, 0.2));
+            goldMat.emissiveColor = new BABYLON.Color3(0.6, 0.4, 0);
+            const ladderMat = mat(new BABYLON.Color3(0.2, 0.8, 0.3));
+            const playerMat = mat(new BABYLON.Color3(0.2, 0.6, 1));
+
+            const map = [
+                "########################",
+                "#.............G.......L#",
+                "#........######........#",
+                "#..G...................#",
+                "#.......L.........G....#",
+                "########################"
+            ];
+
+            const tileSize = 2;
+            const solids = [];
+            const ladders = [];
+            const golds = [];
+
+            for (let y = 0; y < map.length; y++) {
+                for (let x = 0; x < map[y].length; x++) {
+
+                    const char = map[y][x];
+                    const worldX = x * tileSize;
+                    const worldY = (map.length - y) * tileSize;
+
+                    if (char === "#") {
+                        const block = BABYLON.MeshBuilder.CreateBox("b", { size: tileSize }, scene);
+                        block.position.set(worldX, worldY, 0);
+                        block.material = brickMat;
+                        block.receiveShadows = true;
+                        solids.push(block);
+                    }
+
+                    if (char === "L") {
+                        const ladder = BABYLON.MeshBuilder.CreateBox("l",
+                            { width: 1, height: 2, depth: 0.5 }, scene);
+                        ladder.position.set(worldX, worldY, 0);
+                        ladder.material = ladderMat;
+                        ladders.push(ladder);
+                    }
+
+                    if (char === "G") {
+                        const gold = BABYLON.MeshBuilder.CreateCylinder("g",
+                            { diameter: 1, height: 0.5 }, scene);
+                        gold.position.set(worldX, worldY, 0);
+                        gold.material = goldMat;
+                        shadowGen.addShadowCaster(gold);
+                        golds.push(gold);
+                    }
+
+                }
+            }
+
+            // ================= WATER =================
+            // const water = BABYLON.MeshBuilder.CreateGround("water",
+            //     { width: 100, height: 6 }, scene);
+            // water.position.y = 0;
+            // water.position.z = -10;
+            // const waterMat = mat(new BABYLON.Color3(0, 0.4, 0.6));
+            // waterMat.alpha = 0.6;
+            // water.material = waterMat;
+
+
+            // ================= PLAYER =================
+            const player = BABYLON.MeshBuilder.CreateBox("player",
+                { size: 1.5 }, scene);
+            player.position.set(4, 12, 0);
+            player.material = playerMat;
+            shadowGen.addShadowCaster(player);
+
+            let velocityY = 0;
+            const gravity = -0.02;
+            const speed = 0.18;
+            let onGround = false;
+            let onLadder = false;
+
+            const keys = {};
+            window.addEventListener("keydown", e => keys[e.key] = true);
+            window.addEventListener("keyup", e => keys[e.key] = false);
+
+            function checkGround() {
+                onGround = false;
+                for (let s of solids) {
+                    if (Math.abs(s.position.x - player.position.x) < 1 &&
+                        Math.abs(s.position.y - (player.position.y - 1)) < 1) {
+                        player.position.y = s.position.y + 1.5;
+                        velocityY = 0;
+                        onGround = true;
+                    }
+                }
+            }
+
+            function checkLadder() {
+                onLadder = false;
+                for (let l of ladders) {
+                    if (Math.abs(l.position.x - player.position.x) < 1 &&
+                        Math.abs(l.position.y - player.position.y) < 1) {
+                        onLadder = true;
+                    }
+                }
+            }
+
+            // ================= UI =================
+            const ui = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+
+            const goldText = new BABYLON.GUI.TextBlock();
+            goldText.text = "Gold: 0";
+            goldText.color = "#FFD700";
+            goldText.fontSize = 22;
+            goldText.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+            goldText.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+            goldText.paddingLeft = "20px";
+            goldText.paddingTop = "20px";
+            ui.addControl(goldText);
+
+            let goldCount = 0;
+
+            // ================= GAME LOOP =================
+            scene.onBeforeRenderObservable.add(() => {
+
+                // movement
+                if (keys["ArrowLeft"]) player.position.x -= speed;
+                if (keys["ArrowRight"]) player.position.x += speed;
+
+                checkLadder();
+
+                if (onLadder) {
+                    if (keys["ArrowUp"]) player.position.y += speed;
+                    if (keys["ArrowDown"]) player.position.y -= speed;
+                    velocityY = 0;
+                } else {
+                    velocityY += gravity;
+                    player.position.y += velocityY;
+                    checkGround();
+                }
+
+                if (keys[" "] && onGround) velocityY = 0.55;
+
+                // collect gold
+                for (let i = golds.length - 1; i >= 0; i--) {
+                    if (player.intersectsMesh(golds[i], false)) {
+                        golds[i].dispose();
+                        golds.splice(i, 1);
+                        goldCount++;
+                        goldText.text = "Gold: " + goldCount;
+                    }
+                }
+
+                // ===== CAMERA FOLLOW X ONLY =====
+                const diff = player.position.x - camera.position.x;
+                if (Math.abs(diff) > deadZone) {
+                    camera.position.x = BABYLON.Scalar.Lerp(
+                        camera.position.x,
+                        player.position.x,
+                        followSpeed
+                    );
+                }
+
+                camera.position.y = cameraBaseY;
+                camera.position.z = cameraBaseZ;
+
+                // ===== PARALLAX MOVE =====
+                sky.position.x = camera.position.x * 0.10;
+                mountain.position.x = camera.position.x * 0.25;
+                // farGround.position.x = camera.position.x * 0.40;
+
+            });
+
+            return scene;
+        };
+
+        const scene = createScene();
+        engine.runRenderLoop(() => scene.render());
+        window.addEventListener("resize", () => engine.resize());
+    </script>
+</body>
+
+</html>

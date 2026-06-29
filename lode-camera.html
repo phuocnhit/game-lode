@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BabylonJS Grid Map + Dead Zone Camera</title>
+
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
+
+<style>
+html, body {
+    width:100%;
+    height:100%;
+    margin:0;
+    overflow:hidden;
+}
+#renderCanvas{
+    width:100%;
+    height:100%;
+}
+</style>
+</head>
+<body>
+<canvas id="renderCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById("renderCanvas");
+const engine = new BABYLON.Engine(canvas, true);
+
+const createScene = () => {
+
+    const scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.75,0.9,1,1);
+
+    // ===== CAMERA 2.5D =====
+    const camera = new BABYLON.FreeCamera("cam",
+        new BABYLON.Vector3(0, 8, -25),
+        scene);
+
+    camera.setTarget(new BABYLON.Vector3(0,3,0));
+    camera.fov = BABYLON.Tools.ToRadians(50);
+
+    new BABYLON.HemisphericLight("light",
+        new BABYLON.Vector3(0,1,0), scene);
+
+    // ===== CREATE GRID MAP (BOX TILES) =====
+    const tileSize = 2;
+    const mapWidth = 50;
+    const mapHeight = 6;
+
+    const tileMat = new BABYLON.StandardMaterial("tileMat", scene);
+    tileMat.diffuseColor = new BABYLON.Color3(0.6,0.4,0.2);
+
+    // tạo nền dưới cùng
+    for(let x=-mapWidth; x<=mapWidth; x++){
+        const tile = BABYLON.MeshBuilder.CreateBox("tile",
+            {size: tileSize}, scene);
+        tile.position.x = x * tileSize;
+        tile.position.y = 0;
+        tile.material = tileMat;
+    }
+
+    // tạo các platform tầng trên
+    for(let x=-20; x<=20; x++){
+        if(x % 2 === 0){
+            const tile = BABYLON.MeshBuilder.CreateBox("tile",
+                {size: tileSize}, scene);
+            tile.position.x = x * tileSize;
+            tile.position.y = 6;
+            tile.material = tileMat;
+        }
+    }
+
+    for(let x=-15; x<=15; x++){
+        if(x % 3 === 0){
+            const tile = BABYLON.MeshBuilder.CreateBox("tile",
+                {size: tileSize}, scene);
+            tile.position.x = x * tileSize;
+            tile.position.y = 12;
+            tile.material = tileMat;
+        }
+    }
+
+    // ===== PLAYER =====
+    const player = BABYLON.MeshBuilder.CreateBox("player",{size:2},scene);
+    player.position.y = 2;
+
+    const pmat = new BABYLON.StandardMaterial("pmat", scene);
+    pmat.diffuseColor = new BABYLON.Color3(1,0.3,0.3);
+    player.material = pmat;
+
+    // ===== INPUT =====
+    let input = {left:false,right:false,up:false,down:false};
+
+    window.addEventListener("keydown",(e)=>{
+        if(e.key==="ArrowLeft") input.left=true;
+        if(e.key==="ArrowRight") input.right=true;
+        if(e.key==="ArrowUp") input.up=true;
+        if(e.key==="ArrowDown") input.down=true;
+    });
+
+    window.addEventListener("keyup",(e)=>{
+        if(e.key==="ArrowLeft") input.left=false;
+        if(e.key==="ArrowRight") input.right=false;
+        if(e.key==="ArrowUp") input.up=false;
+        if(e.key==="ArrowDown") input.down=false;
+    });
+
+    // ===== DEAD ZONE =====
+    const screenW = engine.getRenderWidth();
+    const screenH = engine.getRenderHeight();
+
+    const dzWidth  = screenW * 0.4;
+    const dzHeight = screenH * 0.5;
+
+    const dzLeft   = screenW/2 - dzWidth/2;
+    const dzRight  = screenW/2 + dzWidth/2;
+    const dzTop    = screenH/2 - dzHeight/2;
+    const dzBottom = screenH/2 + dzHeight/2;
+
+    const gui = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("ui");
+
+    const rect = new BABYLON.GUI.Rectangle();
+    rect.width = dzWidth + "px";
+    rect.height = dzHeight + "px";
+    rect.color = "red";
+    rect.thickness = 2;
+    rect.background = "transparent";
+    gui.addControl(rect);
+
+    // ===== MAP LIMIT =====
+    const mapMinX = -mapWidth * tileSize;
+    const mapMaxX =  mapWidth * tileSize;
+
+    scene.onBeforeRenderObservable.add(()=>{
+
+        // ===== PLAYER MOVE =====
+        const speed = 0.3;
+        let velocityX = 0;
+        let velocityY = 0;
+
+        if(input.left) velocityX = -speed;
+        if(input.right) velocityX = speed;
+        if(input.up) velocityY = speed;
+        if(input.down) velocityY = -speed;
+
+        player.position.x += velocityX;
+        player.position.y += velocityY;
+
+        // ===== WORLD TO SCREEN =====
+        const screenPos = BABYLON.Vector3.Project(
+            player.position,
+            BABYLON.Matrix.Identity(),
+            scene.getTransformMatrix(),
+            camera.viewport.toGlobal(
+                engine.getRenderWidth(),
+                engine.getRenderHeight()
+            )
+        );
+
+        let desiredCam = camera.position.clone();
+
+        // DEAD ZONE X
+        if(screenPos.x < dzLeft){
+            desiredCam.x -= (dzLeft - screenPos.x) * 0.02;
+        }
+        if(screenPos.x > dzRight){
+            desiredCam.x += (screenPos.x - dzRight) * 0.02;
+        }
+
+        // DEAD ZONE Y
+        if(screenPos.y < dzTop){
+            desiredCam.y += (dzTop - screenPos.y) * 0.02;
+        }
+        if(screenPos.y > dzBottom){
+            desiredCam.y -= (screenPos.y - dzBottom) * 0.02;
+        }
+
+        // LOOK AHEAD
+        desiredCam.x += velocityX * 2;
+
+        // SMOOTH
+        camera.position = BABYLON.Vector3.Lerp(
+            camera.position,
+            desiredCam,
+            0.1
+        );
+
+        // CLAMP
+        camera.position.x = BABYLON.Scalar.Clamp(
+            camera.position.x,
+            mapMinX,
+            mapMaxX
+        );
+
+        // Giữ góc nhìn 2.5D
+        camera.setTarget(new BABYLON.Vector3(
+            camera.position.x,
+            camera.position.y - 2,
+            0
+        ));
+    });
+
+    return scene;
+};
+
+const scene = createScene();
+
+engine.runRenderLoop(()=>{ scene.render(); });
+
+window.addEventListener("resize",()=>{ engine.resize(); });
+
+</script>
+</body>
+</html>

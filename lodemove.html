@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lode Runner FreeCamera Demo</title>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<style>
+html, body {
+    width:100%;
+    height:100%;
+    margin:0;
+    overflow:hidden;
+    background:black;
+}
+canvas {
+    width:100%;
+    height:100%;
+    touch-action:none;
+}
+</style>
+</head>
+<body>
+
+<canvas id="renderCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById("renderCanvas");
+const engine = new BABYLON.Engine(canvas, true);
+
+const createScene = () => {
+
+    const scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0,0,0,1);
+
+    // =====================================
+    // FREE CAMERA (2.5D FIXED POSITION)
+    // =====================================
+
+    const camera = new BABYLON.FreeCamera(
+        "cam",
+        new BABYLON.Vector3(0, 15, -25),
+        scene
+    );
+
+    camera.setTarget(new BABYLON.Vector3(0,3,0));
+    camera.attachControl(canvas, false);
+
+    // khóa di chuyển tay
+    camera.inputs.clear();
+
+    const baseRotationY = 0;
+    camera.rotation.x = 0.5;
+    camera.rotation.y = baseRotationY;
+
+    // =====================================
+    // LIGHT
+    // =====================================
+
+    new BABYLON.HemisphericLight(
+        "light",
+        new BABYLON.Vector3(0,1,0),
+        scene
+    );
+
+    // =====================================
+    // SKY (PARALLAX)
+    // =====================================
+
+    const sky = BABYLON.MeshBuilder.CreatePlane("sky", {
+        width:200,
+        height:100
+    }, scene);
+
+    sky.position.z = 40;
+    sky.position.y = 25;
+
+    const skyMat = new BABYLON.StandardMaterial("skyMat", scene);
+    skyMat.emissiveColor = new BABYLON.Color3(0.2,0.6,1);
+    sky.material = skyMat;
+
+    // =====================================
+    // MAP GRID
+    // =====================================
+
+    const tileSize = 2;
+    const width = 14;
+
+    const groundMat = new BABYLON.StandardMaterial("gMat", scene);
+    groundMat.diffuseColor = new BABYLON.Color3(0.7,0.5,0.2);
+
+    for (let x=0; x<width; x++){
+        const box = BABYLON.MeshBuilder.CreateBox("g", {
+            size:tileSize
+        }, scene);
+
+        box.position.x = (x - width/2) * tileSize;
+        box.position.y = 0;
+        box.material = groundMat;
+    }
+
+    // =====================================
+    // PLAYER
+    // =====================================
+
+    const player = BABYLON.MeshBuilder.CreateBox("player", {
+        size:1.5
+    }, scene);
+
+    player.position.y = 2;
+
+    const pMat = new BABYLON.StandardMaterial("pMat", scene);
+    pMat.diffuseColor = new BABYLON.Color3(1,0.2,0.2);
+    player.material = pMat;
+
+    let dir = 1;
+    let moveSpeed = 0.15;
+
+    const input = {};
+    window.addEventListener("keydown", e => input[e.key] = true);
+    window.addEventListener("keyup", e => input[e.key] = false);
+
+    // =====================================
+    // LOOP
+    // =====================================
+
+    scene.onBeforeRenderObservable.add(()=>{
+
+        let moving = false;
+
+        if (input["ArrowLeft"]){
+            player.position.x -= moveSpeed;
+            dir = -1;
+            moving = true;
+        }
+
+        if (input["ArrowRight"]){
+            player.position.x += moveSpeed;
+            dir = 1;
+            moving = true;
+        }
+
+        // =============================
+        // MICRO ROTATE CAMERA
+        // =============================
+
+        const targetRot =
+            dir === 1
+            ? baseRotationY + 0.05
+            : baseRotationY - 0.05;
+
+        camera.rotation.y = BABYLON.Scalar.Lerp(
+            camera.rotation.y,
+            moving ? targetRot : baseRotationY,
+            0.05
+        );
+
+        // =============================
+        // TARGET SHIFT (giả follow nhẹ)
+        // =============================
+
+        const target = new BABYLON.Vector3(
+            player.position.x * 0.15,
+            3,
+            0
+        );
+
+        const currentTarget = camera.getTarget();
+
+        const newTarget = BABYLON.Vector3.Lerp(
+            currentTarget,
+            target,
+            0.05
+        );
+
+        camera.setTarget(newTarget);
+
+        // =============================
+        // PARALLAX SKY
+        // =============================
+
+        sky.position.x = player.position.x * 0.05;
+    });
+
+    return scene;
+};
+
+const scene = createScene();
+
+engine.runRenderLoop(()=>{
+    scene.render();
+});
+
+window.addEventListener("resize", ()=>{
+    engine.resize();
+});
+</script>
+
+</body>
+</html>

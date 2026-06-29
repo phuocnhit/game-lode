@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Lode Runner - Babylon.js</title>
+	<style>
+		html, body {
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			overflow: hidden;
+			background: #0f172a;
+			font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+		}
+
+		#renderCanvas {
+			width: 100%;
+			height: 100%;
+			touch-action: none;
+			display: block;
+		}
+
+		.hud {
+			position: fixed;
+			top: 12px;
+			left: 12px;
+			padding: 8px 12px;
+			border-radius: 8px;
+			background: rgba(0, 0, 0, 0.45);
+			color: #fff;
+			font-weight: 600;
+			letter-spacing: 0.3px;
+			z-index: 10;
+			user-select: none;
+		}
+	</style>
+</head>
+<body>
+	<div id="hud" class="hud">Gold: 0</div>
+	<canvas id="renderCanvas"></canvas>
+
+	<script src="https://cdn.babylonjs.com/babylon.js"></script>
+	<script>
+		(() => {
+			const canvas = document.getElementById("renderCanvas");
+			const hud = document.getElementById("hud");
+			const engine = new BABYLON.Engine(canvas, true);
+
+			const TILE = 2;
+			const PLAYER_RADIUS = 0.4 * TILE;
+
+			// Camera setup requested
+			const CAMERA_CONFIG = {
+				minPitch: 1.54,       // nearly perpendicular at bottom
+				maxPitch: 1.34,       // stronger vertical pitch change at top
+				mapBottomY: 0,
+				mapTopY: 20,
+				smoothing: 0.16,
+				horizontalYawRange: 0.12
+			};
+
+			const MAP = [
+				"####################",
+				"#..H........G......#",
+				"###H################",
+				"#..H..####..###....#",
+				"#..H...............#",
+				"#..H.....G....###..#",
+				"#..H....#####......#",
+				"#..H...............#",
+				"#..H...........E...#",
+				"#P.H................#",
+				"####################"
+			];
+
+			function clamp01(v) {
+				return Math.max(0, Math.min(1, v));
+			}
+
+			// Dynamic camera update: beta from player Y, alpha follows player X.
+			function updateCamera(player, camera, dt, mapWidthWorld, mapCenterX, mapCenterY) {
+				const yNorm = clamp01(
+					(player.position.y - CAMERA_CONFIG.mapBottomY) /
+					(CAMERA_CONFIG.mapTopY - CAMERA_CONFIG.mapBottomY)
+				);
+
+				const targetBeta = BABYLON.Scalar.Lerp(
+					CAMERA_CONFIG.minPitch,
+					CAMERA_CONFIG.maxPitch,
+					yNorm
+				);
+
+				// Exponential smoothing avoids jitter on sudden Y velocity changes.
+				const smoothT = 1 - Math.pow(1 - CAMERA_CONFIG.smoothing, Math.max(1, dt * 60));
+				camera.beta = BABYLON.Scalar.Lerp(camera.beta, targetBeta, smoothT);
+
+				const xNorm = clamp01(player.position.x / mapWidthWorld);
+
+				const baseAlpha = -Math.PI / 2;
+				const horizontalInfluence = (xNorm - 0.5) * 2; // -1 (left) .. 1 (right)
+				const followYaw = horizontalInfluence * CAMERA_CONFIG.horizontalYawRange;
+				const targetAlpha = baseAlpha + followYaw;
+				camera.alpha = BABYLON.Scalar.Lerp(camera.alpha, targetAlpha, smoothT);
+
+				// Keep the map frame fixed: do not follow player position.
+				camera.target.x = mapCenterX;
+				camera.target.y = mapCenterY;
+				camera.target.z = 0;
+			}
+
+			function createScene() {
+				const scene = new BABYLON.Scene(engine);
+				scene.clearColor = new BABYLON.Color3(0.6, 0.9, 1.0);
+
+				const camera = new BABYLON.ArcRotateCamera(
+					"cam",
+					-Math.PI / 2,
+					CAMERA_CONFIG.minPitch,
+					32,
+					new BABYLON.Vector3(10, 6, 0),
+					scene
+				);
+				camera.lowerBetaLimit = 0.55;
+				camera.upperBetaLimit = 1.55;
+				camera.lowerRadiusLimit = 18;
+				camera.upperRadiusLimit = 42;
+				camera.attachControl(canvas, true);
+
+				const light = new BABYLON.HemisphericLight("h", new BABYLON.Vector3(0, 1, 0), scene);
+				light.intensity = 0.95;
+
+				const mapW = MAP[0].length;
+				const mapH = MAP.length;
+				const mapWidthWorld = mapW * TILE;
+				const mapHeightWorld = mapH * TILE;
+				const mapCenterX = mapWidthWorld * 0.5;
+				const mapCenterY = mapHeightWorld * 0.5;
+
+				const golds = [];
+				const enemies = [];
+
+				function tileToWorld(col, row) {
+					const x = col * TILE + TILE / 2;
+					const y = (mapH - 1 - row) * TILE + TILE / 2;
+					return { x, y };
+				}
+
+				const ground = BABYLON.MeshBuilder.CreateGround(
+					"g",
+					{ width: mapW * TILE, height: mapH * TILE },
+					scene
+				);
+				ground.position.x = (mapW * TILE) / 2;
+				ground.position.y = (mapH * TILE) / 2;
+				ground.isVisible = false;
+
+				for (let r = 0; r < mapH; r++) {
+					for (let c = 0; c < mapW; c++) {
+						const ch = MAP[r][c];
+						const w = tileToWorld(c, r);
+
+						if (ch === "#") {
+							const box = BABYLON.MeshBuilder.CreateBox(`b_${r}_${c}`, { size: TILE }, scene);
+							box.position = new BABYLON.Vector3(w.x, w.y, 0);
+							const mat = new BABYLON.StandardMaterial("m_block", scene);
+							mat.diffuseColor = new BABYLON.Color3(0.35, 0.25, 0.1);
+							box.material = mat;
+						} else if (ch === "H") {
+							const ladder = BABYLON.MeshBuilder.CreateBox(
+								`lad_${r}_${c}`,
+								{ width: TILE * 0.4, depth: 0.2, height: TILE },
+								scene
+							);
+							ladder.position = new BABYLON.Vector3(w.x, w.y, 0);
+							const mat = new BABYLON.StandardMaterial("m_ladder", scene);
+							mat.diffuseColor = new BABYLON.Color3(0.9, 0.7, 0.4);
+							ladder.material = mat;
+						} else if (ch === "G") {
+							const gold = BABYLON.MeshBuilder.CreateSphere(
+								`gold_${r}_${c}`,
+								{ diameter: TILE * 0.5 },
+								scene
+							);
+							gold.position = new BABYLON.Vector3(w.x, w.y, 0);
+							const mat = new BABYLON.StandardMaterial("m_gold", scene);
+							mat.diffuseColor = new BABYLON.Color3(1, 0.85, 0);
+							gold.material = mat;
+							golds.push({ mesh: gold, r, c });
+						} else if (ch === "E") {
+							const enem = BABYLON.MeshBuilder.CreateSphere(
+								`e_${r}_${c}`,
+								{ diameter: TILE * 0.8 },
+								scene
+							);
+							enem.position = new BABYLON.Vector3(w.x, w.y, 0);
+							const mat = new BABYLON.StandardMaterial("m_e", scene);
+							mat.diffuseColor = new BABYLON.Color3(1, 0.2, 0.2);
+							enem.material = mat;
+							enemies.push({ mesh: enem, dir: 1, left: c - 4, right: c + 4 });
+						}
+					}
+				}
+
+				let player = null;
+				const playerState = { vx: 0, vy: 0, onGround: false, onLadder: false };
+
+				for (let r = 0; r < mapH; r++) {
+					for (let c = 0; c < mapW; c++) {
+						if (MAP[r][c] === "P") {
+							const w = tileToWorld(c, r);
+							player = BABYLON.MeshBuilder.CreateSphere(
+								"player",
+								{ diameter: PLAYER_RADIUS * 2 },
+								scene
+							);
+							player.position = new BABYLON.Vector3(w.x, w.y + PLAYER_RADIUS, 0);
+							const mat = new BABYLON.StandardMaterial("m_p", scene);
+							mat.diffuseColor = new BABYLON.Color3(0.2, 0.5, 1);
+							player.material = mat;
+						}
+					}
+				}
+
+				const controls = { left: false, right: false, up: false, down: false };
+
+				window.addEventListener("keydown", (e) => {
+					if (e.key === "ArrowLeft" || e.key === "a") controls.left = true;
+					if (e.key === "ArrowRight" || e.key === "d") controls.right = true;
+					if (e.key === "ArrowUp" || e.key === "w") controls.up = true;
+					if (e.key === "ArrowDown" || e.key === "s") controls.down = true;
+					if (e.key === " ") {
+						if (playerState.onGround && !playerState.onLadder) {
+							playerState.vy = 8;
+							playerState.onGround = false;
+						}
+					}
+				});
+
+				window.addEventListener("keyup", (e) => {
+					if (e.key === "ArrowLeft" || e.key === "a") controls.left = false;
+					if (e.key === "ArrowRight" || e.key === "d") controls.right = false;
+					if (e.key === "ArrowUp" || e.key === "w") controls.up = false;
+					if (e.key === "ArrowDown" || e.key === "s") controls.down = false;
+				});
+
+				function isSolidAtColRow(col, row) {
+					if (row < 0 || row >= mapH || col < 0 || col >= mapW) return true;
+					return MAP[row][col] === "#";
+				}
+
+				function isLadderAt(col, row) {
+					if (row < 0 || row >= mapH || col < 0 || col >= mapW) return false;
+					return MAP[row][col] === "H";
+				}
+
+				function worldToCol(x) {
+					return Math.floor(x / TILE);
+				}
+
+				function worldToRow(y) {
+					return mapH - 1 - Math.floor(y / TILE);
+				}
+
+				let collected = 0;
+
+				scene.onBeforeRenderObservable.add(() => {
+					const dt = engine.getDeltaTime() / 1000;
+
+					const speed = 6;
+					playerState.vx = 0;
+					if (controls.left) playerState.vx = -speed;
+					if (controls.right) playerState.vx = speed;
+
+					const pc = worldToCol(player.position.x);
+					const pr = worldToRow(player.position.y - PLAYER_RADIUS);
+					playerState.onLadder = isLadderAt(pc, pr) || isLadderAt(pc, worldToRow(player.position.y));
+
+					if (playerState.onLadder && controls.up) {
+						playerState.vy = 3;
+					} else if (playerState.onLadder && controls.down) {
+						playerState.vy = -3;
+					} else if (!playerState.onLadder) {
+						playerState.vy -= 20 * dt;
+					}
+
+					const nextX = player.position.x + playerState.vx * dt;
+					let nextY = player.position.y + playerState.vy * dt;
+
+					const footY = nextY - PLAYER_RADIUS - 0.01;
+					const footRow = worldToRow(footY);
+					const footCol = worldToCol(nextX);
+
+					if (isSolidAtColRow(footCol, footRow)) {
+						const tileTop = (mapH - 1 - footRow) * TILE + TILE;
+						nextY = tileTop + PLAYER_RADIUS;
+						playerState.vy = 0;
+						playerState.onGround = true;
+					} else {
+						playerState.onGround = false;
+					}
+
+					const centerCol = worldToCol(nextX);
+					const centerRow = worldToRow(nextY);
+					if (!isSolidAtColRow(centerCol, centerRow)) {
+						player.position.x = nextX;
+					}
+
+					player.position.y = nextY;
+
+					updateCamera(player, camera, dt, mapWidthWorld, mapCenterX, mapCenterY);
+
+					for (let i = golds.length - 1; i >= 0; i--) {
+						const g = golds[i];
+						const hit = BABYLON.Vector3.DistanceSquared(player.position, g.mesh.position) < (TILE * 0.8) * (TILE * 0.8);
+						if (hit) {
+							g.mesh.dispose();
+							golds.splice(i, 1);
+							collected++;
+							hud.textContent = `Gold: ${collected}`;
+							if (golds.length === 0) {
+								setTimeout(() => alert("You collected all gold! You win!"), 100);
+							}
+						}
+					}
+
+					enemies.forEach((en) => {
+						en.mesh.position.x += en.dir * dt * 2.6;
+						if (en.mesh.position.x < en.left * TILE || en.mesh.position.x > en.right * TILE) {
+							en.dir *= -1;
+						}
+
+						const touched = BABYLON.Vector3.DistanceSquared(player.position, en.mesh.position) < (TILE * 0.7) * (TILE * 0.7);
+						if (touched) {
+							setTimeout(() => location.reload(), 200);
+						}
+					});
+				});
+
+				return scene;
+			}
+
+			const scene = createScene();
+			engine.runRenderLoop(() => scene.render());
+			window.addEventListener("resize", () => engine.resize());
+		})();
+	</script>
+</body>
+</html>

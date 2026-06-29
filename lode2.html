@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Lode Runner Xbox Style - BabylonJS</title>
+
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+
+    <style>
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="renderCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById("renderCanvas");
+        const engine = new BABYLON.Engine(canvas, true);
+        const scene = new BABYLON.Scene(engine);
+
+        scene.clearColor = new BABYLON.Color3(0.6, 0.85, 1);
+
+        // ================= CAMERA =================
+        const camera = new BABYLON.FreeCamera("cam",
+            new BABYLON.Vector3(0, 6, -18),
+            scene
+        );
+        camera.setTarget(new BABYLON.Vector3(0, 4, 0));
+        camera.fov = 0.9;
+
+        // ================= LIGHT =================
+        const light = new BABYLON.HemisphericLight("light",
+            new BABYLON.Vector3(0, 1, 0),
+            scene
+        );
+        light.intensity = 1;
+
+        // ===== SKY IMAGE =====
+        const sky = BABYLON.MeshBuilder.CreatePlane("sky", {
+            width: 120,
+            height: 60
+        }, scene);
+
+        sky.position.z = 30;
+        sky.position.y = 20;
+
+        const skyMat = new BABYLON.StandardMaterial("skyMat", scene);
+        skyMat.diffuseTexture = new BABYLON.Texture("sky.png", scene);
+        skyMat.diffuseTexture.hasAlpha = false;
+        skyMat.emissiveColor = BABYLON.Color3.White(); // quan trọng!
+        skyMat.backFaceCulling = false; // để không bị đen
+
+        sky.material = skyMat;
+
+        // ================= WATER =================
+        const water = BABYLON.MeshBuilder.CreateGround("water", { width: 80, height: 20 }, scene);
+        water.position.y = -1;
+        water.position.z = 5;
+        const waterMat = new BABYLON.StandardMaterial("waterMat", scene);
+        waterMat.diffuseColor = new BABYLON.Color3(0.1, 0.6, 0.8);
+        waterMat.alpha = 0.6;
+        water.material = waterMat;
+
+        // ================= MAP GRID =================
+        const TILE = {
+            EMPTY: 0,
+            BRICK: 1,
+            LADDER: 2,
+            CHEST: 3
+        };
+
+        const level = [
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0, 0, 0, 3, 0, 1],
+            [1, 0, 2, 0, 0, 2, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        ];
+
+        const tileSize = 2;
+        const mapRoot = new BABYLON.TransformNode("mapRoot", scene);
+
+        function buildMap() {
+            for (let y = 0; y < level.length; y++) {
+                for (let x = 0; x < level[y].length; x++) {
+                    const type = level[y][x];
+                    const posX = x * tileSize;
+                    const posY = (level.length - y) * tileSize;
+
+                    if (type === TILE.BRICK) {
+                        const box = BABYLON.MeshBuilder.CreateBox("b", { size: tileSize }, scene);
+                        box.position.set(posX, posY, 0);
+                        box.parent = mapRoot;
+                        box.material = brickMat;
+                    }
+
+                    if (type === TILE.LADDER) {
+                        const ladder = BABYLON.MeshBuilder.CreateBox("ladder", { width: 1, height: 2, depth: 0.3 }, scene);
+                        ladder.position.set(posX, posY, 0.5);
+                        ladder.material = ladderMat;
+                        ladder.parent = mapRoot;
+                    }
+
+                    if (type === TILE.CHEST) {
+                        const chest = BABYLON.MeshBuilder.CreateBox("chest", { size: 1.2 }, scene);
+                        chest.position.set(posX, posY, 0.5);
+                        chest.material = chestMat;
+                        chest.parent = mapRoot;
+                    }
+                }
+            }
+        }
+
+        const brickMat = new BABYLON.StandardMaterial("brick", scene);
+        brickMat.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.2);
+
+        const ladderMat = new BABYLON.StandardMaterial("ladder", scene);
+        ladderMat.diffuseColor = new BABYLON.Color3(1, 0.9, 0);
+
+        const chestMat = new BABYLON.StandardMaterial("chest", scene);
+        chestMat.diffuseColor = new BABYLON.Color3(1, 0.8, 0);
+
+        buildMap();
+
+        // ================= PLAYER =================
+        const player = BABYLON.MeshBuilder.CreateBox("player", { size: 1.5 }, scene);
+        player.position.set(2, 4, 0.5);
+
+        const playerMat = new BABYLON.StandardMaterial("pMat", scene);
+        playerMat.diffuseColor = new BABYLON.Color3(1, 0, 0);
+        player.material = playerMat;
+
+        let velocityY = 0;
+        const gravity = 0.05;
+        const speed = 0.15;
+
+        const input = {};
+        window.addEventListener("keydown", e => input[e.key] = true);
+        window.addEventListener("keyup", e => input[e.key] = false);
+
+        function isSolid(x, y) {
+            if (!level[y]) return false;
+            return level[y][x] === TILE.BRICK;
+        }
+
+        function isLadder(x, y) {
+            if (!level[y]) return false;
+            return level[y][x] === TILE.LADDER;
+        }
+
+        function updatePlayer() {
+            let gridX = Math.floor(player.position.x / tileSize);
+            let gridY = level.length - 1 - Math.floor(player.position.y / tileSize);
+
+            // gravity
+            if (!isSolid(gridX, gridY + 1) && !isLadder(gridX, gridY)) {
+                velocityY -= gravity;
+            } else {
+                velocityY = 0;
+            }
+
+            player.position.y += velocityY;
+
+            // left
+            if (input["ArrowLeft"]) {
+                if (!isSolid(gridX - 1, gridY))
+                    player.position.x -= speed;
+            }
+
+            // right
+            if (input["ArrowRight"]) {
+                if (!isSolid(gridX + 1, gridY))
+                    player.position.x += speed;
+            }
+
+            // climb
+            if (isLadder(gridX, gridY)) {
+                if (input["ArrowUp"]) player.position.y += speed;
+                if (input["ArrowDown"]) player.position.y -= speed;
+            }
+        }
+
+        // ================= ENEMY =================
+        const enemy = BABYLON.MeshBuilder.CreateBox("enemy", { size: 1.5 }, scene);
+        enemy.position.set(14, 8, 0.5);
+
+        const enemyMat = new BABYLON.StandardMaterial("eMat", scene);
+        enemyMat.diffuseColor = new BABYLON.Color3(0.3, 0.3, 0.3);
+        enemy.material = enemyMat;
+
+        function updateEnemy() {
+            const dx = player.position.x - enemy.position.x;
+            enemy.position.x += Math.sign(dx) * 0.03;
+        }
+
+        // ================= CAMERA FOLLOW =================
+        scene.onBeforeRenderObservable.add(() => {
+            updatePlayer();
+            updateEnemy();
+
+            camera.position.x = BABYLON.Scalar.Lerp(
+                camera.position.x,
+                player.position.x,
+                0.08
+            );
+
+            sky.position.x = camera.position.x * 0.1;
+        });
+
+        engine.runRenderLoop(() => {
+            scene.render();
+        });
+
+        window.addEventListener("resize", () => engine.resize());
+    </script>
+</body>
+
+</html>

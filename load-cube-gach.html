@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Babylon Cube Texture</title>
+	<style>
+		html, body {
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			overflow: hidden;
+		}
+
+		#renderCanvas {
+			width: 100%;
+			height: 100%;
+			touch-action: none;
+			display: block;
+		}
+	</style>
+</head>
+<body>
+	<canvas id="renderCanvas"></canvas>
+
+	<script src="https://cdn.babylonjs.com/babylon.js"></script>
+	<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+	<script src="https://cdn.babylonjs.com/inspector/babylon.inspector.bundle.js"></script>
+	<script>
+		const canvas = document.getElementById("renderCanvas");
+		const engine = new BABYLON.Engine(canvas, true);
+
+		const createScene = () => {
+			const scene = new BABYLON.Scene(engine);
+			scene.clearColor = new BABYLON.Color4(0.08, 0.08, 0.1, 1);
+			scene.environmentTexture = BABYLON.CubeTexture.CreateFromPrefilteredData(
+				"https://playground.babylonjs.com/textures/environment.env",
+				scene
+			);
+			scene.imageProcessingConfiguration.toneMappingEnabled = true;
+			scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+			scene.imageProcessingConfiguration.exposure = 1.3;
+			scene.imageProcessingConfiguration.contrast = 1.05;
+
+			const camera = new BABYLON.ArcRotateCamera(
+				"camera",
+				Math.PI / 4,
+				Math.PI / 3,
+				24,
+				BABYLON.Vector3.Zero(),
+				scene
+			);
+			camera.lowerRadiusLimit = 12;
+			camera.upperRadiusLimit = 40;
+			camera.attachControl(canvas, true);
+
+			const fillLight = new BABYLON.HemisphericLight(
+				"fillLight",
+				new BABYLON.Vector3(0, 1, 0),
+				scene
+			);
+			fillLight.intensity = 1.1;
+			fillLight.groundColor = new BABYLON.Color3(0.75, 0.75, 0.75);
+
+			const cube = BABYLON.MeshBuilder.CreateBox("cube", { size: 3 }, scene);
+			cube.position.x = -3;
+			const cube2 = BABYLON.MeshBuilder.CreateBox("cube2", { size: 3 }, scene);
+			cube2.position.x = -8;
+
+			const cubeMaterial = new BABYLON.PBRMaterial("cubeMaterial", scene);
+			cubeMaterial.albedoTexture = new BABYLON.Texture("assets/gach.png", scene);
+			cubeMaterial.metallic = 0;
+			cubeMaterial.roughness = 0.97;
+			cubeMaterial.environmentIntensity = 0.8;
+			cubeMaterial.specularIntensity = 0.18;
+			cube.material = cubeMaterial;
+			cube2.material = cubeMaterial;
+
+			const addIceModelAt = (targetX, rootName) => {
+				BABYLON.SceneLoader.ImportMesh("", "assets/", "Ice.glb", scene, (meshes) => {
+					const iceRoot = new BABYLON.TransformNode(rootName, scene);
+					for (const mesh of meshes) {
+						if (!(mesh instanceof BABYLON.AbstractMesh)) continue;
+						mesh.parent = iceRoot;
+					}
+
+					const targetSize = 3;
+					const bounds = iceRoot.getHierarchyBoundingVectors(true);
+					const size = bounds.max.subtract(bounds.min);
+					const maxDim = Math.max(size.x || 1, size.y || 1, size.z || 1);
+					const uniformScale = targetSize / maxDim;
+					iceRoot.scaling.setAll(uniformScale);
+
+					const fittedBounds = iceRoot.getHierarchyBoundingVectors(true);
+					const center = fittedBounds.min.add(fittedBounds.max).scale(0.5);
+					iceRoot.position.set(targetX - center.x, -center.y, -center.z);
+				});
+			};
+
+			addIceModelAt(3, "iceRoot1");
+			addIceModelAt(8, "iceRoot2");
+
+			return scene;
+		};
+
+		const scene = createScene();
+
+		window.addEventListener("keydown", (event) => {
+			if (event.key === "F2") {
+				if (scene.debugLayer.isVisible()) {
+					scene.debugLayer.hide();
+				} else {
+					scene.debugLayer.show({ embedMode: true });
+				}
+			}
+		});
+
+		engine.runRenderLoop(() => {
+			scene.render();
+		});
+
+		window.addEventListener("resize", () => {
+			engine.resize();
+		});
+	</script>
+</body>
+</html>

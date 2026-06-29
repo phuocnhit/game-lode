@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Brick GLB Viewer</title>
+	<script src="https://cdn.babylonjs.com/babylon.js"></script>
+	<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+	<style>
+		html,
+		body {
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			overflow: hidden;
+			background:
+				radial-gradient(circle at top, rgba(255, 214, 153, 0.22), transparent 32%),
+				linear-gradient(180deg, #f6efe4 0%, #d3dde8 50%, #9bb3c8 100%);
+			font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+		}
+
+		#renderCanvas {
+			width: 100%;
+			height: 100%;
+			display: block;
+			touch-action: none;
+		}
+
+		.hud {
+			position: fixed;
+			left: 20px;
+			top: 20px;
+			z-index: 10;
+			max-width: 320px;
+			color: #192531;
+			background: rgba(255, 248, 239, 0.84);
+			border: 1px solid rgba(76, 57, 39, 0.16);
+			border-radius: 16px;
+			backdrop-filter: blur(10px);
+			box-shadow: 0 18px 40px rgba(25, 37, 49, 0.14);
+			padding: 16px 18px;
+		}
+
+		.hud h1 {
+			margin: 0 0 8px;
+			font-size: 20px;
+			line-height: 1.2;
+		}
+
+		.hud p {
+			margin: 6px 0;
+			font-size: 14px;
+			line-height: 1.45;
+		}
+
+		.status {
+			margin-top: 10px;
+			padding: 10px 12px;
+			border-radius: 10px;
+			background: rgba(255, 255, 255, 0.7);
+			font-weight: 600;
+		}
+
+		@media (max-width: 640px) {
+			.hud {
+				left: 12px;
+				top: 12px;
+				right: 12px;
+				max-width: none;
+			}
+
+			.hud h1 {
+				font-size: 18px;
+			}
+		}
+	</style>
+</head>
+<body>
+	<div class="hud">
+		<h1>Brick GLB Viewer</h1>
+		<p>Mouse drag: orbit camera</p>
+		<p>Mouse wheel: zoom</p>
+		<p>Right mouse: pan</p>
+		<div id="status" class="status">Loading model...</div>
+	</div>
+	<canvas id="renderCanvas"></canvas>
+
+	<script>
+		const canvas = document.getElementById("renderCanvas");
+		const statusEl = document.getElementById("status");
+		const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+
+		function setStatus(message) {
+			statusEl.textContent = message;
+		}
+
+		function createScene() {
+			const scene = new BABYLON.Scene(engine);
+			scene.clearColor = BABYLON.Color4.FromColor3(BABYLON.Color3.FromHexString("#dce8f2"), 1);
+			scene.environmentTexture = BABYLON.CubeTexture.CreateFromPrefilteredData(
+				"https://playground.babylonjs.com/textures/environment.env",
+				scene
+			);
+
+			const camera = new BABYLON.ArcRotateCamera(
+				"camera",
+				-Math.PI / 2,
+				1.15,
+				8,
+				new BABYLON.Vector3(0, 1, 0),
+				scene
+			);
+			camera.attachControl(canvas, true);
+			camera.wheelDeltaPercentage = 0.02;
+			camera.lowerRadiusLimit = 1;
+			camera.upperRadiusLimit = 40;
+			camera.panningSensibility = 80;
+
+			const hemiLight = new BABYLON.HemisphericLight("hemiLight", new BABYLON.Vector3(0, 1, 0), scene);
+			hemiLight.intensity = 1.1;
+
+			const dirLight = new BABYLON.DirectionalLight("dirLight", new BABYLON.Vector3(-0.6, -1, 0.4), scene);
+			dirLight.position = new BABYLON.Vector3(8, 12, -8);
+			dirLight.intensity = 1.8;
+
+			const shadowGenerator = new BABYLON.ShadowGenerator(2048, dirLight);
+			shadowGenerator.usePercentageCloserFiltering = true;
+
+			const ground = BABYLON.MeshBuilder.CreateGround("ground", {
+				width: 12,
+				height: 12,
+			}, scene);
+			ground.position.y = -0.75;
+			ground.receiveShadows = true;
+
+			const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
+			groundMaterial.diffuseColor = BABYLON.Color3.FromHexString("#c28a55");
+			groundMaterial.specularColor = BABYLON.Color3.Black();
+			ground.material = groundMaterial;
+
+			return { scene, camera, ground, shadowGenerator };
+		}
+
+		function frameCamera(camera, rootNode, ground) {
+			const bounds = rootNode.getHierarchyBoundingVectors(true);
+			const size = bounds.max.subtract(bounds.min);
+			const center = bounds.min.add(bounds.max).scale(0.5);
+			const maxSize = Math.max(size.x, size.y, size.z, 1);
+
+			rootNode.position.subtractInPlace(center);
+			let alignedBounds = rootNode.getHierarchyBoundingVectors(true);
+			const bottomY = alignedBounds.min.y;
+
+			rootNode.position.y += ground.position.y - bottomY;
+			alignedBounds = rootNode.getHierarchyBoundingVectors(true);
+			const alignedCenter = alignedBounds.min.add(alignedBounds.max).scale(0.5);
+			camera.target.copyFrom(alignedCenter);
+			camera.target.y = ground.position.y + Math.max(size.y * 0.45, 0.8);
+			camera.radius = maxSize * 2.6;
+			camera.lowerRadiusLimit = Math.max(maxSize * 0.7, 1);
+			camera.upperRadiusLimit = Math.max(maxSize * 8, 10);
+		}
+
+		function cloneToStandardMaterial(sourceMaterial, scene, materialName) {
+			const standardMaterial = new BABYLON.StandardMaterial(materialName, scene);
+			standardMaterial.specularColor = BABYLON.Color3.Black();
+
+			if (!sourceMaterial) {
+				standardMaterial.diffuseColor = new BABYLON.Color3(0.8, 0.6, 0.3);
+				return standardMaterial;
+			}
+
+			const baseTexture = sourceMaterial.albedoTexture || sourceMaterial.diffuseTexture || null;
+			const normalTexture = sourceMaterial.bumpTexture || null;
+			const emissiveTexture = sourceMaterial.emissiveTexture || null;
+			const opacityTexture = sourceMaterial.opacityTexture || null;
+			const baseColor = sourceMaterial.albedoColor || sourceMaterial.diffuseColor || null;
+			const emissiveColor = sourceMaterial.emissiveColor || null;
+
+			if (baseTexture) {
+				standardMaterial.diffuseTexture = baseTexture;
+			}
+
+			if (normalTexture) {
+				standardMaterial.bumpTexture = normalTexture;
+			}
+
+			if (emissiveTexture) {
+				standardMaterial.emissiveTexture = emissiveTexture;
+			}
+
+			if (opacityTexture) {
+				standardMaterial.opacityTexture = opacityTexture;
+			}
+
+			if (baseColor) {
+				standardMaterial.diffuseColor = baseColor.clone ? baseColor.clone() : baseColor;
+			} else {
+				standardMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
+			}
+
+			if (emissiveColor) {
+				standardMaterial.emissiveColor = emissiveColor.clone ? emissiveColor.clone() : emissiveColor;
+			}
+
+			standardMaterial.alpha = typeof sourceMaterial.alpha === "number" ? sourceMaterial.alpha : 1;
+			return standardMaterial;
+		}
+
+		function normalizeImportedMaterials(rootNode, scene) {
+			const convertedMaterials = new Map();
+
+			for (const mesh of rootNode.getChildMeshes(false)) {
+				const sourceMaterial = mesh.material;
+				if (!sourceMaterial) {
+					mesh.material = cloneToStandardMaterial(null, scene, "fallbackMaterial_" + mesh.name);
+					continue;
+				}
+
+				if (!convertedMaterials.has(sourceMaterial.uniqueId)) {
+					convertedMaterials.set(
+						sourceMaterial.uniqueId,
+						cloneToStandardMaterial(sourceMaterial, scene, "importedMaterial_" + sourceMaterial.name)
+					);
+				}
+
+				mesh.material = convertedMaterials.get(sourceMaterial.uniqueId);
+			}
+		}
+
+		async function loadModel(scene, shadowGenerator) {
+			const candidates = ["brick.glb", "Brick.glb"];
+			const modelCount = 5;
+			const gap = 0.005;
+			let lastError = null;
+
+			for (const fileName of candidates) {
+				const groupRoot = new BABYLON.TransformNode("modelGroupRoot_" + fileName, scene);
+				const loadedRoots = [];
+
+				try {
+					for (let index = 0; index < modelCount; index++) {
+						const modelRoot = new BABYLON.TransformNode("modelRoot_" + index, scene);
+						modelRoot.parent = groupRoot;
+
+						const result = await BABYLON.SceneLoader.ImportMeshAsync("", "assets/", fileName, scene);
+
+						for (const mesh of result.meshes) {
+							if (!(mesh instanceof BABYLON.AbstractMesh)) {
+								continue;
+							}
+							if (mesh === modelRoot || mesh.parent === modelRoot) {
+								continue;
+							}
+							mesh.parent = modelRoot;
+							mesh.receiveShadows = true;
+							shadowGenerator.addShadowCaster(mesh);
+						}
+
+						normalizeImportedMaterials(modelRoot, scene);
+						loadedRoots.push(modelRoot);
+					}
+
+					const widths = loadedRoots.map((root) => {
+						const bounds = root.getHierarchyBoundingVectors(true);
+						const width = bounds.max.x - bounds.min.x;
+						return Math.max(width, 0.0001);
+					});
+
+					const totalWidth = widths.reduce((sum, width) => sum + width, 0) + gap * Math.max(0, loadedRoots.length - 1);
+					let cursor = -totalWidth * 0.5;
+
+					for (let index = 0; index < loadedRoots.length; index++) {
+						cursor += widths[index] * 0.5;
+						loadedRoots[index].position.x = cursor;
+						cursor += widths[index] * 0.5 + gap;
+					}
+
+					setStatus("Loaded " + modelCount + " models: assets/" + fileName);
+					return groupRoot;
+				} catch (error) {
+					lastError = error;
+					groupRoot.dispose();
+				}
+			}
+
+			throw lastError || new Error("Unable to load GLB model.");
+		}
+
+		async function bootstrap() {
+			const { scene, camera, ground, shadowGenerator } = createScene();
+
+			try {
+				const modelRoot = await loadModel(scene, shadowGenerator);
+				frameCamera(camera, modelRoot, ground);
+			} catch (error) {
+				console.error(error);
+				setStatus("Load failed. Check assets/Brick.glb");
+
+				const fallbackBox = BABYLON.MeshBuilder.CreateBox("fallbackBox", { size: 1.5 }, scene);
+				fallbackBox.position.y = 0.1;
+				const fallbackMaterial = new BABYLON.StandardMaterial("fallbackMaterial", scene);
+				fallbackMaterial.diffuseColor = BABYLON.Color3.FromHexString("#a85632");
+				fallbackBox.material = fallbackMaterial;
+				shadowGenerator.addShadowCaster(fallbackBox);
+				frameCamera(camera, fallbackBox, ground);
+			}
+
+			engine.runRenderLoop(() => {
+				scene.render();
+			});
+
+			window.addEventListener("resize", () => {
+				engine.resize();
+			});
+		}
+
+		bootstrap();
+	</script>
+</body>
+</html>

@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Lode Runner Enemy AI</title>
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+
+    <canvas id="renderCanvas"></canvas>
+
+    <script>
+
+        const map = [
+            "..................S.........",
+            "E...G.............S....E....",
+            "#######L#######...S.........",
+            ".......L##########S....G....",
+            ".......L....##L...#######L##",
+            ".......L....##L..........L..",
+            ".......L....##L.......G..L..",
+            "##L#####....########L#######",
+            "..L.................L.......",
+            "..L.................L.......",
+            "#########L##########L.......",
+            ".........L..........L.......",
+            ".......G.L##########L.......",
+            "....L######.........#######L",
+            "....L......P.....G.........L",
+            "############################",
+        ];
+
+        const canvas = document.getElementById("renderCanvas");
+        const engine = new BABYLON.Engine(canvas, true);
+
+        let playerMesh
+
+        let playerGrid
+        const enemies = []
+
+        function isSolid(x, y) {
+
+            if (y < 0 || y >= map.length) return true
+            if (x < 0 || x >= map[0].length) return true
+
+            return map[y][x] === "#"
+
+        }
+
+        function isLadder(x, y) {
+            if (y < 0 || y >= map.length) return false
+            if (x < 0 || x >= map[0].length) return false
+            return map[y][x] === "L"
+        }
+
+        function isRope(x, y) {
+            if (y < 0 || y >= map.length) return false
+            if (x < 0 || x >= map[0].length) return false
+            return map[y][x] === "S"
+        }
+
+        function canStand(x, y) {
+
+            if (isLadder(x, y)) return true
+            if (isLadder(x, y + 1)) return true
+
+            return isSolid(x, y + 1)
+
+        }
+
+        function neighbors(x, y) {
+
+            const result = []
+            const canWalkTo = (nx, ny) => {
+                if (isSolid(nx, ny)) return false
+                if (isRope(nx, ny)) return false
+                return canStand(nx, ny)
+            }
+
+            if (canWalkTo(x + 1, y))
+                result.push({ x: x + 1, y })
+
+            if (canWalkTo(x - 1, y))
+                result.push({ x: x - 1, y })
+
+            if (isLadder(x, y))
+                if (canWalkTo(x, y - 1))
+                    result.push({ x, y: y - 1 })
+
+            if (isLadder(x, y) || isLadder(x, y + 1))
+                if (canWalkTo(x, y + 1))
+                    result.push({ x, y: y + 1 })
+
+            return result
+
+        }
+
+        function findPath(start, end) {
+
+            const queue = [{ ...start, path: [start] }]
+            const visited = new Set()
+
+            while (queue.length) {
+
+                const node = queue.shift()
+
+                const key = node.x + "," + node.y
+
+                if (visited.has(key)) continue
+
+                visited.add(key)
+
+                if (node.x === end.x && node.y === end.y)
+                    return node.path
+
+                for (const nb of neighbors(node.x, node.y)) {
+
+                    queue.push({
+                        x: nb.x,
+                        y: nb.y,
+                        path: [...node.path, nb]
+                    })
+
+                }
+
+            }
+
+            return []
+
+        }
+
+        function drawDebug(scene, enemy, path) {
+
+            enemy.debugBoxes.forEach(b => b.dispose())
+            enemy.debugBoxes = []
+
+            if (enemy.debugLine) {
+                enemy.debugLine.dispose()
+                enemy.debugLine = null
+            }
+
+            if (path.length === 0) return
+
+            const points = []
+
+            for (const p of path) {
+
+                const box = BABYLON.MeshBuilder.CreateBox("debug", { size: 0.4 }, scene)
+
+                box.position = new BABYLON.Vector3(
+                    p.x,
+                    -p.y,
+                    1
+                )
+
+                const mat = new BABYLON.StandardMaterial("mat", scene)
+                mat.diffuseColor = new BABYLON.Color3(1, 0, 0)
+                mat.emissiveColor = new BABYLON.Color3(1, 0, 0)
+
+                box.material = mat
+
+                enemy.debugBoxes.push(box)
+
+                points.push(new BABYLON.Vector3(p.x, -p.y, 2))
+
+            }
+
+            if (points.length >= 2) {
+                enemy.debugLine = BABYLON.MeshBuilder.CreateLines(
+                    "pathLine",
+                    { points: points },
+                    scene
+                )
+                enemy.debugLine.color = new BABYLON.Color3(1, 0, 0)
+            }
+
+        }
+
+        function updateEnemies(scene) {
+
+            enemies.forEach((enemy, index) => {
+                const path = findPath(enemy.grid, playerGrid)
+                const pathPointsText = path
+                    .map((p, i) => `${i}:(${p.x},${p.y})`)
+                    .join(" -> ")
+
+                if (path.length) {
+                    console.log(`enemy ${index} path:`, pathPointsText)
+                } else {
+                    console.log(`enemy ${index} path: no path`)
+                }
+
+                drawDebug(scene, enemy, path)
+
+                if (path.length > 1) {
+                    enemy.grid = path[1]
+                    enemy.mesh.position.x = enemy.grid.x
+                    enemy.mesh.position.y = -enemy.grid.y
+                }
+            })
+
+        }
+
+        function createScene() {
+
+            const scene = new BABYLON.Scene(engine)
+
+            const camera = new BABYLON.FreeCamera(
+                "camera",
+                new BABYLON.Vector3(14, -8, -40),
+                scene
+            )
+
+            camera.setTarget(new BABYLON.Vector3(14, -8, 0))
+            camera.attachControl(canvas, true)
+
+            new BABYLON.HemisphericLight(
+                "light",
+                new BABYLON.Vector3(0, 1, 0),
+                scene
+            )
+
+            for (let y = 0; y < map.length; y++)
+                for (let x = 0; x < map[y].length; x++) {
+
+                    const c = map[y][x]
+
+                    const pos = new BABYLON.Vector3(x, -y, 0)
+
+                    if (c === "#") {
+
+                        const brick = BABYLON.MeshBuilder.CreateBox("b", { size: 1 }, scene)
+                        brick.position = pos
+
+                        const mat = new BABYLON.StandardMaterial("mat", scene)
+                        mat.diffuseColor = new BABYLON.Color3(0.6, 0.3, 0.2)
+                        brick.material = mat
+
+                    }
+
+                    if (c === "L") {
+
+                        const ladder = BABYLON.MeshBuilder.CreateBox(
+                            "l",
+                            { height: 1, width: 0.3, depth: 0.3 },
+                            scene
+                        )
+
+                        ladder.position = pos
+
+                        const mat = new BABYLON.StandardMaterial("mat2", scene)
+                        mat.diffuseColor = new BABYLON.Color3(1, 1, 0)
+                        ladder.material = mat
+
+                    }
+
+                    if (c === "S") {
+
+                        const rope = BABYLON.MeshBuilder.CreateCylinder(
+                            "r",
+                            { height: 1, diameter: 0.1 },
+                            scene
+                        )
+
+                        rope.rotation.z = Math.PI / 2
+                        rope.position = pos
+
+                        const mat = new BABYLON.StandardMaterial("mat3", scene)
+                        mat.diffuseColor = new BABYLON.Color3(0, 1, 1)
+                        rope.material = mat
+
+                    }
+
+                    if (c === "P") {
+
+                        playerMesh = BABYLON.MeshBuilder.CreateBox(
+                            "player",
+                            { size: 0.8 },
+                            scene
+                        )
+
+                        playerMesh.position = pos
+
+                        const mat = new BABYLON.StandardMaterial("pm", scene)
+                        mat.diffuseColor = new BABYLON.Color3(0, 0, 1)
+                        playerMesh.material = mat
+
+                        playerGrid = { x, y }
+
+                    }
+
+                    if (c === "E") {
+
+                        const enemyMesh = BABYLON.MeshBuilder.CreateBox(
+                            `enemy_${enemies.length}`,
+                            { size: 0.8 },
+                            scene
+                        )
+
+                        enemyMesh.position = pos
+
+                        const mat = new BABYLON.StandardMaterial("em", scene)
+                        mat.diffuseColor = new BABYLON.Color3(1, 0, 0)
+                        enemyMesh.material = mat
+
+                        enemies.push({
+                            mesh: enemyMesh,
+                            grid: { x, y },
+                            debugBoxes: [],
+                            debugLine: null,
+                        })
+
+                    }
+
+                }
+
+            setInterval(() => {
+
+                updateEnemies(scene)
+
+            }, 500)
+
+            return scene
+
+        }
+
+        const scene = createScene()
+
+        engine.runRenderLoop(() => {
+
+            scene.render()
+
+        })
+
+        window.addEventListener("resize", () => engine.resize())
+
+    </script>
+
+</body>
+
+</html>
