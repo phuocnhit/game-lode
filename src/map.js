@@ -33,6 +33,7 @@
         const dugHoles = new Set();
         let playerSpawn = new BABYLON.Vector3(4, 12, 0);
         let playerMesh = null;
+        let ladderTexMat = null;
 
         function holeKey(col, row) {
             return `${col},${row}`;
@@ -170,13 +171,23 @@
 
                 if (char === "L") {
                     const ladderDepth = tileSize * 0.04;
-                    const ladder = BABYLON.MeshBuilder.CreateBox("l", {
+                    const ladder = BABYLON.MeshBuilder.CreatePlane("l", {
                         width: tileSize,
                         height: GRID_STEP_Y,
-                        depth: ladderDepth,
+                        sideOrientation: BABYLON.Mesh.DOUBLESIDE,
                     }, scene);
                     ladder.position.set(worldX, worldY, (tileSize / 2) + (ladderDepth / 2));
-                    ladder.material = ladderMat;
+                    if (!ladderTexMat) {
+                        ladderTexMat = new BABYLON.StandardMaterial("ladderTex", scene);
+                        const tex = new BABYLON.Texture("assets/ladder.png", scene);
+                        tex.hasAlpha = true;
+                        ladderTexMat.diffuseTexture = tex;
+                        ladderTexMat.opacityTexture = tex;
+                        ladderTexMat.useAlphaFromDiffuseTexture = true;
+                        ladderTexMat.backFaceCulling = false;
+                        ladderTexMat.emissiveColor = new BABYLON.Color3(0.4, 0.4, 0.4);
+                    }
+                    ladder.material = ladderTexMat;
                     ladders.push(ladder);
                 }
 

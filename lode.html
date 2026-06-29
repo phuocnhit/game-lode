@@ -60,12 +60,42 @@
             pointer-events: none;
             transform: translate(0px, 0px);
         }
+
+        #digButtons {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            display: flex;
+            gap: 16px;
+            z-index: 20;
+        }
+
+        #digButtons button {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            background: rgba(255, 255, 255, 0.15);
+            color: #fff;
+            font-size: 24px;
+            font-weight: bold;
+            touch-action: none;
+            user-select: none;
+        }
+
+        #digButtons button:active {
+            background: rgba(255, 255, 255, 0.35);
+        }
     </style>
 </head>
 
 <body>
     <canvas id="renderCanvas"></canvas>
     <div id="virtualJoystick" aria-hidden="true"><div class="stick"></div></div>
+    <div id="digButtons">
+        <button id="digLeft" type="button">A</button>
+        <button id="digRight" type="button">B</button>
+    </div>
 
     <script>
         const canvas = document.getElementById("renderCanvas");
@@ -202,7 +232,7 @@
                 "cam",
                 -Math.PI / 2,
                 CAMERA_CONFIG.minPitch,
-                48,
+                30,
                 new BABYLON.Vector3(0, 0, 0),
                 scene
             );

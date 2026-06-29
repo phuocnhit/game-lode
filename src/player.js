@@ -25,7 +25,7 @@
 
         let enemyController = initialEnemyController;
 
-        const player = BABYLON.MeshBuilder.CreateBox("player", { size: 1.5 }, scene);
+        const player = BABYLON.MeshBuilder.CreateCapsule("player", { radius: 0.6, height: 1.5 }, scene);
         player.position.copyFrom(playerSpawn);
         player.material = playerMat;
         shadowGen.addShadowCaster(player);
@@ -388,6 +388,21 @@
             if (e.key === "a" || e.key === "A") digBrick(-1);
             if (e.key === "b" || e.key === "B") digBrick(1);
         });
+
+        const digLeftBtn = document.getElementById("digLeft");
+        const digRightBtn = document.getElementById("digRight");
+        if (digLeftBtn) {
+            digLeftBtn.addEventListener("pointerdown", (e) => {
+                e.preventDefault();
+                digBrick(-1);
+            });
+        }
+        if (digRightBtn) {
+            digRightBtn.addEventListener("pointerdown", (e) => {
+                e.preventDefault();
+                digBrick(1);
+            });
+        }
 
         let goldCount = 0;
 
