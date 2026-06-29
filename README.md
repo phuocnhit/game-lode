@@ -2,7 +2,7 @@
 
 This is a small prototype of a Lode Runner–style game using Babylon.js (no build step required).
 
-Quick start
+Quick start 
 
 - Open [index.html](index.html) in a browser, or run a local static server from the project folder:
 
